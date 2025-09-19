@@ -1,0 +1,32 @@
+# Add .env file to gitignore to keep secrets safe
+.env
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+
+# Environment variables - keep secrets safe
+Configuration/.env
+
+# Data files - can be regenerated
+Data/
+*.json
