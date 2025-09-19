@@ -85,6 +85,14 @@ class DialpadAPI:
                 filtered_users.append(user)
         return filtered_users
     
+    def filter_call_centers_by_office(self, call_centers: List[Dict[str, Any]], office_id: str) -> List[Dict[str, Any]]:
+        """Filter call centers by office ID"""
+        filtered_call_centers = []
+        for call_center in call_centers:
+            if call_center.get('office_id') == office_id:
+                filtered_call_centers.append(call_center)
+        return filtered_call_centers
+    
     def get_call_center_users(self, call_center_id: str) -> List[Dict[str, Any]]:
         """Get users specifically from a call center"""
         try:
@@ -151,18 +159,105 @@ class DialpadAPI:
             return []
 
     def get_call_centers(self) -> List[Dict[str, Any]]:
-        """Get call centers information"""
+        """Get call centers information with pagination support"""
         try:
-            url = self.config.get_api_url('callcenters/')
-            logger.debug(f"Fetching call centers from: {url}")
+            all_call_centers = []
+            cursor = None
             
-            response = self.session.get(url, timeout=self.config.request_timeout)
-            response.raise_for_status()
+            while True:
+                url = self.config.get_api_url('callcenters/')
+                params = {}
+                if cursor:
+                    params['cursor'] = cursor
+                
+                logger.debug(f"Fetching call centers from: {url} (cursor: {cursor})")
+                
+                response = self.session.get(url, params=params, timeout=self.config.request_timeout)
+                response.raise_for_status()
+                
+                data = response.json()
+                call_centers = data.get('items', [])
+                all_call_centers.extend(call_centers)
+                
+                logger.debug(f"Fetched {len(call_centers)} call centers (total: {len(all_call_centers)})")
+                
+                # Check for next page
+                cursor = data.get('cursor')
+                if not cursor or not call_centers:
+                    break
+                    
+                # Safety limit to prevent infinite loops
+                if len(all_call_centers) > 1000:
+                    logger.warning(f"Reached safety limit of 1000 call centers")
+                    break
             
-            data = response.json()
-            return data.get('results', [])
+            logger.info(f"Total call centers fetched: {len(all_call_centers)}")
+            return all_call_centers
+            
         except requests.exceptions.RequestException as e:
             logger.error(f"Error fetching call centers: {e}")
+            return []
+
+    def get_calls(self, limit: int = None, start_time: str = None, end_time: str = None, **filters) -> List[Dict[str, Any]]:
+        """Get call history with pagination support and optional filtering
+        
+        Args:
+            limit: Maximum number of calls to fetch (None for all)
+            start_time: Start time filter (ISO 8601 format)
+            end_time: End time filter (ISO 8601 format)
+            **filters: Additional query parameters for filtering
+        """
+        try:
+            all_calls = []
+            cursor = None
+            fetched_count = 0
+            
+            while True:
+                url = self.config.get_api_url('call/')
+                params = {}
+                
+                if cursor:
+                    params['cursor'] = cursor
+                if start_time:
+                    params['start_time'] = start_time
+                if end_time:
+                    params['end_time'] = end_time
+                
+                # Add any additional filters
+                params.update(filters)
+                
+                logger.debug(f"Fetching calls from: {url} (cursor: {cursor}, params: {params})")
+                
+                response = self.session.get(url, params=params, timeout=self.config.request_timeout)
+                response.raise_for_status()
+                
+                data = response.json()
+                calls = data.get('items', [])
+                all_calls.extend(calls)
+                fetched_count += len(calls)
+                
+                logger.debug(f"Fetched {len(calls)} calls (total: {len(all_calls)})")
+                
+                # Check if we've reached the limit
+                if limit and fetched_count >= limit:
+                    all_calls = all_calls[:limit]  # Trim to exact limit
+                    break
+                
+                # Check for next page
+                cursor = data.get('cursor')
+                if not cursor or not calls:
+                    break
+                    
+                # Safety limit to prevent runaway fetching
+                if len(all_calls) > 10000:
+                    logger.warning(f"Reached safety limit of 10000 calls")
+                    break
+            
+            logger.info(f"Total calls fetched: {len(all_calls)}")
+            return all_calls
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching calls: {e}")
             return []
 
 class EmployeeStatusService:

@@ -6,6 +6,8 @@ This script fetches all users from the GlobalNOC office and saves them to a JSON
 for caching. This avoids having to paginate through all 686+ users every time we want
 to check employee status.
 
+Also creates simplified user files for easy editing of custom variables.
+
 Usage:
     python3 fetch_globalnoc_users.py
     python3 fetch_globalnoc_users.py --output custom_filename.json
@@ -13,6 +15,7 @@ Usage:
 
 import json
 import logging
+import csv
 from datetime import datetime
 from pathlib import Path
 import argparse
@@ -116,6 +119,148 @@ class GlobalNOCUserFetcher:
             
             if len(data['users']) > 5:
                 print(f"  ... and {len(data['users']) - 5} more users")
+    
+    def load_existing_simplified_users(self, data_dir: Path) -> Dict[str, Dict[str, Any]]:
+        """Load existing simplified users to preserve custom data"""
+        json_file = data_dir / "simplified_users.json"
+        csv_file = data_dir / "simplified_users.csv"
+        
+        existing_users = {}
+        
+        # Try to load from JSON first
+        if json_file.exists():
+            try:
+                with open(json_file, 'r') as f:
+                    data = json.load(f)
+                    if 'users' in data:
+                        existing_users = {user['id']: user for user in data['users']}
+                        logger.info(f"Loaded {len(existing_users)} existing simplified users from JSON")
+            except Exception as e:
+                logger.warning(f"Could not load existing JSON simplified users: {e}")
+        
+        # Try CSV as fallback
+        elif csv_file.exists():
+            try:
+                with open(csv_file, 'r') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        existing_users[row['id']] = row
+                    logger.info(f"Loaded {len(existing_users)} existing simplified users from CSV")
+            except Exception as e:
+                logger.warning(f"Could not load existing CSV simplified users: {e}")
+        
+        return existing_users
+    
+    def create_simplified_users(self, user_data: Dict[str, Any]) -> None:
+        """Create simplified user files with smart merging to preserve custom data"""
+        script_dir = Path(__file__).parent
+        parent_dir = script_dir.parent
+        data_dir = parent_dir / "Data"
+        data_dir.mkdir(exist_ok=True)
+        
+        # Load existing simplified users to preserve custom data
+        existing_users = self.load_existing_simplified_users(data_dir)
+        
+        # Create simplified user list
+        simplified_users = []
+        new_users_count = 0
+        updated_users_count = 0
+        
+        for user in user_data['users']:
+            # Handle emails safely
+            email = ''
+            if user.get('emails') and isinstance(user['emails'], list) and len(user['emails']) > 0:
+                email = user['emails'][0]
+            
+            # Handle phone numbers safely
+            phone_number = ''
+            if user.get('phone_numbers') and isinstance(user['phone_numbers'], list) and len(user['phone_numbers']) > 0:
+                phone_number = user['phone_numbers'][0]
+            
+            # Create base simplified user data
+            simplified_user = {
+                'id': user['id'],
+                'display_name': user['display_name'],
+                'first_name': user.get('first_name', ''),
+                'last_name': user.get('last_name', ''),
+                'email': email,
+                'job_title': user.get('job_title', ''),
+                'department': user.get('department', ''),
+                'phone_number': phone_number,
+                'timezone': user.get('timezone', ''),
+                'license': user.get('license', ''),
+                'is_admin': user.get('is_admin', False),
+                'state': user.get('state', ''),
+                # Custom fields - preserve existing data or initialize empty
+                'role': '',
+                'focus_team': '',
+                'team': '',
+                'manager': '',
+                'shift': '',
+                'priority_level': '',
+                'skills': '',
+                'backup_contact': '',
+                'notes': ''
+            }
+            
+            # Check if user already exists and preserve custom data
+            if user['id'] in existing_users:
+                existing_user = existing_users[user['id']]
+                # Preserve all custom fields from existing data
+                custom_fields = ['role', 'focus_team', 'team', 'manager', 'shift', 'priority_level', 'skills', 'backup_contact', 'notes']
+                for field in custom_fields:
+                    if field in existing_user and existing_user[field]:
+                        simplified_user[field] = existing_user[field]
+                updated_users_count += 1
+            else:
+                new_users_count += 1
+            
+            simplified_users.append(simplified_user)
+        
+        # Save as JSON
+        json_file = data_dir / 'simplified_users.json'
+        json_data = {
+            'metadata': {
+                'created': datetime.now().isoformat(),
+                'source': 'users.json',
+                'total_users': len(simplified_users),
+                'new_users': new_users_count,
+                'updated_users': updated_users_count,
+                'description': 'Simplified user list for easy editing and custom variables'
+            },
+            'users': simplified_users
+        }
+        
+        with open(json_file, 'w') as f:
+            json.dump(json_data, f, indent=2)
+        
+        # Save as CSV
+        csv_file = data_dir / 'simplified_users.csv'
+        fieldnames = list(simplified_users[0].keys())
+        
+        with open(csv_file, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(simplified_users)
+        
+        logger.info(f"✅ Created simplified user files: {len(simplified_users)} users ({new_users_count} new, {updated_users_count} updated)")
+        
+        # Print summary
+        print(f"\n📋 SIMPLIFIED USER FILES UPDATED")
+        print(f"=" * 50)
+        print(f"📄 JSON: {json_file}")
+        print(f"📊 CSV:  {csv_file}")
+        print(f"👥 Total Users: {len(simplified_users)}")
+        print(f"🆕 New Users: {new_users_count}")
+        print(f"🔄 Updated Users: {updated_users_count}")
+        if existing_users:
+            print(f"💾 Custom data preserved for existing users")
+        
+        if new_users_count > 0:
+            print(f"\n🆕 NEW USERS ADDED:")
+            for user in simplified_users:
+                if user['id'] not in existing_users:
+                    print(f"   • {user['display_name']} ({user['email']})")
 
 def load_cached_users(filename: str = "users.json") -> Dict[str, Any]:
     """Load cached users from JSON file in Data folder"""
@@ -147,6 +292,8 @@ def main():
                        help='Output filename for the cached users (default: users.json)')
     parser.add_argument('--verbose', '-v', action='store_true',
                        help='Enable verbose logging')
+    parser.add_argument('--skip-simplified', action='store_true',
+                       help='Skip creating simplified user files')
     
     args = parser.parse_args()
     
@@ -163,6 +310,11 @@ def main():
         
         # Save to file
         fetcher.save_to_file(user_data, args.output)
+        
+        # Create simplified user files with smart merging (unless skipped)
+        if not args.skip_simplified:
+            logger.info("Creating simplified user files...")
+            fetcher.create_simplified_users(user_data)
         
         print(f"\n✅ GlobalNOC user cache created successfully!")
         print(f"📁 Cache file: {Path(args.output).absolute()}")

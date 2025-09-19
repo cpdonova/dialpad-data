@@ -8,6 +8,8 @@ without having to fetch all users from the API every time.
 Usage:
     python3 fast_employee_status.py
     python3 fast_employee_status.py --format detailed
+    python3 fast_employee_status.py --format detailed --sort-by-status
+    python3 fast_employee_status.py --format detailed --sort-by-status --online-only
     python3 fast_employee_status.py --cache custom_users.json
 """
 
@@ -46,7 +48,51 @@ class FastEmployeeStatusChecker:
     def __init__(self, config: Config, cache_file: str = "users.json"):
         self.config = config
         self.api = DialpadAPI(config)
+        self.cache_file = cache_file
+        self.simplified_users = self.load_simplified_users()
+        self.__init_cache_path__(cache_file)
+    
+    def load_simplified_users(self) -> Dict[str, Dict[str, Any]]:
+        """Load simplified user data from CSV file using email as key"""
+        data_dir = Path(__file__).parent.parent / "Data"
+        csv_file = data_dir / "simplified_users.csv"
         
+        simplified_users = {}
+        
+        # Load from CSV file
+        if csv_file.exists():
+            try:
+                import csv
+                with open(csv_file, 'r') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        # Use email as the unique identifier instead of ID
+                        email = row.get('email', '').strip().lower()
+                        if email:
+                            simplified_users[email] = row
+                        else:
+                            logger.warning(f"Skipping row with missing email: {row}")
+                    
+                    logger.info(f"Loaded {len(simplified_users)} simplified users from CSV (keyed by email)")
+                    
+                    # Debug: show count of users with role/focus team data (less verbose)
+                    if simplified_users:
+                        users_with_roles = sum(1 for user in simplified_users.values() 
+                                             if user.get('Role') or user.get('role'))
+                        if users_with_roles > 0:
+                            logger.info(f"Found Role/Focus Team data for {users_with_roles} users")
+                        
+                        sample_emails = list(simplified_users.keys())[:3]
+                        logger.debug(f"Sample CSV emails: {sample_emails}")
+            except Exception as e:
+                logger.error(f"Error loading CSV file: {e}")
+        else:
+            logger.warning(f"CSV file not found at {csv_file}")
+        
+        return simplified_users
+    
+    def __init_cache_path__(self, cache_file: str):
+        """Initialize cache file path"""
         # Construct path to Data folder
         script_dir = Path(__file__).parent
         parent_dir = script_dir.parent
@@ -67,7 +113,7 @@ class FastEmployeeStatusChecker:
         """Load cached user data"""
         try:
             # Use the load_cached_users function which handles Data folder logic
-            self.cached_data = load_cached_users(self.cache_file.name)
+            self.cached_data = load_cached_users(self.cache_file.name if hasattr(self.cache_file, 'name') else self.cache_file)
             
             # Check cache age
             fetch_time = datetime.fromisoformat(self.cached_data['metadata']['fetch_timestamp'])
@@ -133,6 +179,7 @@ class FastEmployeeStatusChecker:
             duty_reason = current_status.get('duty_status_reason', '')
             do_not_disturb = current_status.get('do_not_disturb', False)
             duty_started = current_status.get('duty_status_started', '')
+            is_online = current_status.get('is_online', False)
             
             # Determine display status and color based on duty status
             if on_duty_status == 'available':
@@ -178,6 +225,13 @@ class FastEmployeeStatusChecker:
                 device_name = device.get('name', 'Unknown')
                 device_info.append(f"{device_type}: {device_name}")
             
+            # Get simplified user data for custom fields (using email as key)
+            simplified_user = self.simplified_users.get(email.lower(), {})
+            if simplified_user:
+                logger.debug(f"Found simplified data for {display_name} ({email})")
+            else:
+                logger.debug(f"No simplified data found for {display_name} ({email})")
+            
             employee_details.append({
                 'name': display_name,
                 'email': email,
@@ -187,11 +241,22 @@ class FastEmployeeStatusChecker:
                 'duty_hours': duty_hours,
                 'account_state': account_state,
                 'do_not_disturb': do_not_disturb,
+                'is_online': is_online,
                 'status_color': status_color,
                 'devices': device_info,
                 'department': user.get('department', 'N/A'),
                 'title': user.get('title', 'N/A'),
-                'user_id': user_id
+                'user_id': user_id,
+                # Custom fields from simplified users
+                'role': simplified_user.get('Role', simplified_user.get('role', '')),
+                'focus_team': simplified_user.get('Focus Team', simplified_user.get('focus_team', '')),
+                'team': simplified_user.get('team', ''),
+                'manager': simplified_user.get('manager', ''),
+                'shift': simplified_user.get('shift', ''),
+                'priority_level': simplified_user.get('priority_level', ''),
+                'skills': simplified_user.get('skills', ''),
+                'backup_contact': simplified_user.get('backup_contact', ''),
+                'notes': simplified_user.get('notes', '')
             })
         
         return {
@@ -232,45 +297,197 @@ class FastStatusDisplay:
         print(f"{Fore.YELLOW}No Duty Status: {summary['no_duty_status']}{Style.RESET_ALL}")
     
     @staticmethod
-    def print_detailed(data: Dict[str, Any]) -> None:
+    def print_detailed(data: Dict[str, Any], sort_by_status: bool = False, online_only: bool = False, group_by_team: bool = False) -> None:
         """Print detailed employee information"""
         FastStatusDisplay.print_summary(data)
         
         employees = data['employees']
         
-        print(f"\n{Fore.YELLOW}👥 EMPLOYEE DUTY STATUS{Style.RESET_ALL}")
+        # Filter to online only if requested
+        if online_only:
+            employees = [emp for emp in employees if emp['is_online']]
+            print(f"\n{Fore.CYAN}🌐 Filtered to online employees only ({len(employees)} online){Style.RESET_ALL}")
         
-        # Create table data
-        table_data = []
-        for emp in employees:
-            status_display = f"{emp['status_color']}{emp['status']}{Style.RESET_ALL}"
+        if group_by_team:
+            # Group employees by focus team
+            teams = {}
+            for emp in employees:
+                focus_team = emp.get('focus_team', '') or 'No Team Assigned'
+                if focus_team not in teams:
+                    teams[focus_team] = []
+                teams[focus_team].append(emp)
             
-            # Format duty hours
-            duty_time = ""
-            if emp['duty_hours'] is not None:
-                hours = emp['duty_hours']
-                if hours < 1:
-                    duty_time = f"{int(hours * 60)}m"
-                elif hours < 24:
-                    duty_time = f"{hours:.1f}h"
+            # Sort teams alphabetically, but put 'No Team Assigned' last
+            sorted_teams = sorted([team for team in teams.keys() if team != 'No Team Assigned'])
+            if 'No Team Assigned' in teams:
+                sorted_teams.append('No Team Assigned')
+            
+            print(f"\n{Fore.YELLOW}👥 EMPLOYEE STATUS BY FOCUS TEAM{Style.RESET_ALL}")
+            if sort_by_status:
+                print(f"{Fore.CYAN}📋 Sorted: Online first, then Available, Unknown, then alphabetically by status{Style.RESET_ALL}")
+            
+            for team in sorted_teams:
+                team_employees = teams[team]
+                
+                # Sort within each team
+                if sort_by_status:
+                    def get_status_sort_key(emp):
+                        if emp['on_duty_status'] == 'available':
+                            return "0_available"
+                        elif emp['on_duty_status'] != 'available' and emp['on_duty_status'] != 'unavailable':
+                            return "1_unknown"
+                        elif not emp['duty_reason'] and emp['on_duty_status'] == 'unavailable':
+                            return "2_unavailable"
+                        else:
+                            status_text = emp['duty_reason'] if emp['duty_reason'] else emp['on_duty_status']
+                            return f"2_{status_text}"
+                    
+                    team_employees = sorted(team_employees, key=lambda emp: (
+                        0 if emp['is_online'] else 1,
+                        get_status_sort_key(emp),
+                        emp['name'].lower()
+                    ))
                 else:
-                    days = int(hours / 24)
-                    remaining_hours = hours % 24
-                    duty_time = f"{days}d {remaining_hours:.1f}h"
+                    team_employees.sort(key=lambda x: x['name'])
+                
+                print(f"\n{Fore.MAGENTA}🏢 {team} ({len(team_employees)} employees){Style.RESET_ALL}")
+                print("=" * (len(team) + 20))
+                
+                headers = ['Name', 'Email', 'Role', 'Status', 'Online', 'Duration']
+                table_data = []
+                for emp in team_employees:
+                    # Create combined status column
+                    if emp['on_duty_status'] == 'available':
+                        combined_status = 'Available'
+                        status_color = Fore.GREEN
+                    elif emp['duty_reason']:
+                        combined_status = emp['duty_reason']
+                        status_color = Fore.RED
+                    elif emp['on_duty_status'] == 'unavailable':
+                        combined_status = 'Unavailable'
+                        status_color = Fore.RED
+                    else:
+                        combined_status = 'Unknown'
+                        status_color = Fore.YELLOW
+                    
+                    status_display = f"{status_color}{combined_status}{Style.RESET_ALL}"
+                    online_display = f"{Fore.GREEN}Online{Style.RESET_ALL}" if emp['is_online'] else f"{Fore.RED}Offline{Style.RESET_ALL}"
+                    
+                    # Format duty hours
+                    duty_time = ""
+                    if emp['duty_hours'] is not None:
+                        hours = emp['duty_hours']
+                        if hours < 1:
+                            duty_time = f"{int(hours * 60)}m"
+                        elif hours < 24:
+                            duty_time = f"{hours:.1f}h"
+                        else:
+                            days = int(hours / 24)
+                            remaining_hours = hours % 24
+                            duty_time = f"{days}d {remaining_hours:.1f}h"
+                    
+                    table_data.append([
+                        emp['name'],
+                        emp['email'],
+                        emp.get('role', ''),
+                        status_display,
+                        online_display,
+                        duty_time
+                    ])
+                
+                print(tabulate(table_data, headers=headers, tablefmt='grid'))
+        else:
+            # Original unified table format
+            # Sort employees if requested
+            if sort_by_status:
+                def get_status_sort_key(emp):
+                    """Get sort key for status: Available=0, Unknown=1, others alphabetically starting from 2"""
+                    if emp['on_duty_status'] == 'available':
+                        return "0_available"
+                    elif emp['on_duty_status'] != 'available' and emp['on_duty_status'] != 'unavailable':
+                        # This catches cases where status is neither available nor unavailable (Unknown cases)
+                        return "1_unknown"
+                    elif not emp['duty_reason'] and emp['on_duty_status'] == 'unavailable':
+                        # Generic unavailable without specific reason
+                        return "2_unavailable"
+                    else:
+                        # Sort other statuses alphabetically, starting from priority 2
+                        status_text = emp['duty_reason'] if emp['duty_reason'] else emp['on_duty_status']
+                        return f"2_{status_text}"
+                
+                if online_only:
+                    # For online-only: sort by online first, then custom status order
+                    employees = sorted(employees, key=lambda emp: (
+                        0 if emp['is_online'] else 1,  # Online employees first
+                        get_status_sort_key(emp),  # Custom status sorting
+                        emp['name'].lower()  # Final sort by name
+                    ))
+                else:
+                    # Default sorting: custom status order, then online first within each status
+                    employees = sorted(employees, key=lambda emp: (
+                        get_status_sort_key(emp),  # Custom status sorting
+                        0 if emp['is_online'] else 1,  # Online first within each status group
+                        emp['name'].lower()  # Final sort by name
+                    ))
             
-            table_data.append([
-                emp['name'],
-                emp['email'],
-                status_display,
-                emp['duty_reason'] or '-',
-                duty_time
-            ])
-        
-        headers = ['Name', 'Email', 'Duty Status', 'Reason', 'Duration']
-        print(tabulate(table_data, headers=headers, tablefmt='grid'))
+            print(f"\n{Fore.YELLOW}👥 EMPLOYEE DUTY STATUS{Style.RESET_ALL}")
+            if sort_by_status:
+                if online_only:
+                    print(f"{Fore.CYAN}📋 Sorted: Online first, then Available, Unknown, then alphabetically by status{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.CYAN}📋 Sorted: Available, Unknown, then alphabetically by status{Style.RESET_ALL}")
+            
+            # Create table data
+            table_data = []
+            for emp in employees:
+                # Create combined status column
+                if emp['on_duty_status'] == 'available':
+                    combined_status = 'Available'
+                    status_color = Fore.GREEN
+                elif emp['duty_reason']:
+                    combined_status = emp['duty_reason']
+                    status_color = Fore.RED
+                elif emp['on_duty_status'] == 'unavailable':
+                    combined_status = 'Unavailable'
+                    status_color = Fore.RED
+                else:
+                    combined_status = 'Unknown'
+                    status_color = Fore.YELLOW
+                
+                # Apply color to the combined status
+                status_display = f"{status_color}{combined_status}{Style.RESET_ALL}"
+                
+                # Format online status with color
+                online_display = f"{Fore.GREEN}Online{Style.RESET_ALL}" if emp['is_online'] else f"{Fore.RED}Offline{Style.RESET_ALL}"
+                
+                # Format duty hours
+                duty_time = ""
+                if emp['duty_hours'] is not None:
+                    hours = emp['duty_hours']
+                    if hours < 1:
+                        duty_time = f"{int(hours * 60)}m"
+                    elif hours < 24:
+                        duty_time = f"{hours:.1f}h"
+                    else:
+                        days = int(hours / 24)
+                        remaining_hours = hours % 24
+                        duty_time = f"{days}d {remaining_hours:.1f}h"
+                
+                table_data.append([
+                    emp['name'],
+                    emp['email'],
+                    emp.get('role', ''),
+                    emp.get('focus_team', ''),
+                    status_display,
+                    online_display,
+                    duty_time
+                ])
+            
+            headers = ['Name', 'Email', 'Role', 'Focus Team', 'Status', 'Online', 'Duration']
+            print(tabulate(table_data, headers=headers, tablefmt='grid'))
     
     @staticmethod
-    def print_detailed_json(data: Dict[str, Any]) -> None:
+    def print_detailed_json(data: Dict[str, Any], sort_by_status: bool = False, online_only: bool = False) -> None:
         """Print detailed employee information as JSON"""
         # Create detailed JSON structure
         detailed_data = {
@@ -278,11 +495,29 @@ class FastStatusDisplay:
             "office_info": data['office_info'],
             "summary": data['summary'],
             "generated_timestamp": datetime.now().isoformat(),
+            "sorted_by_status": sort_by_status,
+            "online_only": online_only,
             "employees": []
         }
         
+        employees = data['employees']
+        
+        # Filter to online only if requested
+        if online_only:
+            employees = [emp for emp in employees if emp['is_online']]
+        
+        # Sort employees if requested (available first, then online first within each group)
+        if sort_by_status:
+            employees = sorted(employees, key=lambda emp: (
+                0 if emp['on_duty_status'] == 'available' else
+                1 if emp['on_duty_status'] == 'unavailable' else
+                2,
+                0 if emp['is_online'] else 1,  # Online first within each status group
+                emp['name'].lower()  # Tertiary sort by name
+            ))
+        
         # Process employees for detailed JSON
-        for emp in data['employees']:
+        for emp in employees:
             # Format duty hours for JSON
             duty_time_formatted = ""
             if emp['duty_hours'] is not None:
@@ -296,16 +531,38 @@ class FastStatusDisplay:
                     remaining_hours = hours % 24
                     duty_time_formatted = f"{days}d {remaining_hours:.1f}h"
             
+            # Create combined status
+            if emp['on_duty_status'] == 'available':
+                combined_status = 'Available'
+            elif emp['duty_reason']:
+                combined_status = emp['duty_reason']
+            elif emp['on_duty_status'] == 'unavailable':
+                combined_status = 'Unavailable'
+            else:
+                combined_status = 'Unknown'
+            
             employee_detail = {
                 "name": emp['name'],
                 "email": emp['email'],
+                "role": emp.get('role', ''),
+                "focus_team": emp.get('focus_team', ''),
+                "status": combined_status,
                 "duty_status": emp['on_duty_status'],
                 "duty_reason": emp['duty_reason'] or None,
                 "duty_hours": emp['duty_hours'],
                 "duty_duration_formatted": duty_time_formatted or None,
                 "account_state": emp['account_state'],
                 "do_not_disturb": emp['do_not_disturb'],
-                "user_id": emp['user_id']
+                "is_online": emp['is_online'],
+                "user_id": emp['user_id'],
+                # Additional custom fields
+                "team": emp.get('team', ''),
+                "manager": emp.get('manager', ''),
+                "shift": emp.get('shift', ''),
+                "priority_level": emp.get('priority_level', ''),
+                "skills": emp.get('skills', ''),
+                "backup_contact": emp.get('backup_contact', ''),
+                "notes": emp.get('notes', '')
             }
             
             detailed_data["employees"].append(employee_detail)
@@ -320,6 +577,12 @@ def main():
                        help='Output format: summary (text), detailed (table), json (raw), detailed-json (structured JSON)')
     parser.add_argument('--cache', default='users.json',
                        help='Cached users file (default: users.json)')
+    parser.add_argument('--sort-by-status', action='store_true',
+                       help='Sort employees with available/online users at the top')
+    parser.add_argument('--online-only', action='store_true',
+                       help='Show only employees who are currently online')
+    parser.add_argument('--group-by-team', action='store_true',
+                       help='Group employees by their Focus Team')
     parser.add_argument('--verbose', '-v', action='store_true',
                        help='Enable verbose logging')
     
@@ -348,11 +611,17 @@ def main():
         if args.format == 'summary':
             display.print_summary(status_data)
         elif args.format == 'detailed':
-            display.print_detailed(status_data)
+            display.print_detailed(status_data, sort_by_status=args.sort_by_status, online_only=args.online_only, group_by_team=args.group_by_team)
         elif args.format == 'json':
-            display.print_json(status_data)
+            # For raw JSON, we'll apply online filter but not sorting
+            if args.online_only:
+                filtered_data = status_data.copy()
+                filtered_data['employees'] = [emp for emp in status_data['employees'] if emp['is_online']]
+                print(json.dumps(filtered_data, indent=2, default=str))
+            else:
+                print(json.dumps(status_data, indent=2, default=str))
         elif args.format == 'detailed-json':
-            display.print_detailed_json(status_data)
+            display.print_detailed_json(status_data, sort_by_status=args.sort_by_status, online_only=args.online_only)
         
         print(f"\n{Fore.GREEN}✅ Status check completed successfully!{Style.RESET_ALL}")
         
