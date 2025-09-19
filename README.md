@@ -1,8 +1,20 @@
 # Dialpad Employee Status Monitor
 
+[![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 Fast and efficient employee status monitoring for GlobalNOC using Dialpad API.
 
-This system uses a two-script approach for optimal performance:
+This system uses a two-script approach for optimal performance, monitoring 50+ employees with sub-minute response times.
+
+## ✨ Features
+
+- **⚡ Fast Caching**: Monitor 50+ employees in ~30 seconds vs 2+ minutes
+- **🎯 Real-Time Status**: Shows actual duty status (Available/Unavailable) with reasons
+- **📊 Multiple Formats**: Summary, detailed table, and JSON outputs
+- **🔒 Secure**: Environment variables and data excluded from git
+- **🗂️ Organized**: Professional folder structure for easy maintenance
+- **🤖 Automation-Ready**: JSON output perfect for dashboards and scripts
 
 ## 🚀 Quick Start
 
@@ -73,6 +85,27 @@ python3 "User Status/fetch_users.py"
 
 # Then continue with fast status checks
 python3 "User Status/fast_employee_status.py"
+```
+
+## 📊 Output Examples
+
+### Summary View
+```
+📊 DUTY STATUS SUMMARY
+Total Employees: 50
+Available: 8
+Unavailable: 40
+No Duty Status: 2
+```
+
+### Detailed View
+```
+┌─────────────────────┬─────────────────┬──────────────────────────────┬────────────────┬────────────┐
+│ Name                │ Email           │ Duty Status                  │ Reason         │ Duration   │
+├─────────────────────┼─────────────────┼──────────────────────────────┼────────────────┼────────────┤
+│ John Doe            │ jdoe@iu.edu     │ Available                    │ -              │ 2.3h       │
+│ Jane Smith          │ jsmith@iu.edu   │ Unavailable (At Break)      │ At Break       │ 15m        │
+└─────────────────────┴─────────────────┴──────────────────────────────┴────────────────┴────────────┘
 ```
 
 ## ⚡ Performance Benefits
@@ -149,3 +182,41 @@ python3 "User Status/fetch_users.py"  # Updates timestamp
 - **Rate Limits**: 1200 requests/minute - the cached approach reduces API calls significantly  
 - **User Changes**: Re-run `User Status/fetch_users.py` when team members join/leave
 - **Duration Tracking**: Shows how long employees have been in their current duty state
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📋 Requirements
+
+- Python 3.9+
+- Dialpad API Bearer Token
+- Network access to Dialpad API (dialpad.com)
+
+## 🔧 Configuration
+
+The system uses environment variables for configuration:
+
+- `DIALPAD_BEARER_TOKEN`: Your Dialpad API bearer token (required)
+- `DIALPAD_API_BASE_URL`: API endpoint (defaults to production)
+- `REQUEST_TIMEOUT`: Request timeout in seconds (default: 30)
+
+## ⚠️ Security Notes
+
+- **Never commit** your `.env` file with actual credentials
+- The `Data/` folder contains cached user information - excluded from git
+- Bearer tokens should be kept secure and rotated regularly
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙋 Support
+
+For questions or issues:
+- Create an issue in this repository
+- Contact: Corey Donovan (cpdonova@iu.edu)
